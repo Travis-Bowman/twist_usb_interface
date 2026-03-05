@@ -29,7 +29,7 @@ class TwistToUSB(Node):
         super().__init__("twist_to_usb")
     
         # parameters list: port, baud, input topic, send_rate_hz, timeout_s
-        self.declare_parameter("port","/dev/ttyACM0")
+        self.declare_parameter("port","/dev/igvc_tx_pico")
         self.declare_parameter("baud", 921600)
         self.declare_parameter("topic", "/cmd_vel")
         self.declare_parameter("send_rate_hz", 50.0)
@@ -108,13 +108,15 @@ class TwistToUSB(Node):
         try:
             self.serial.write(pkt)
         except serial.SerialTimeoutException:
-            self.get_logger().warn("Serial Write timeout")
+                self.get_logger().warn("Serial write timeout", throttle_duration_sec=10.0)
         except Exception as e:
-            self.get_logger().error(f"Serial write error: {e}")
+                self.get_logger().error(f"Serial write error: {e}", throttle_duration_sec=10.0)
+                self.try_reconnect()
+
         
         self.seq = (self.seq + 1) & 0xFF
     
-    def destory_node(self):
+    def destroy_node(self):
         try:
             if self.serial and self.serial.is_open:
                 self.serial.close()
