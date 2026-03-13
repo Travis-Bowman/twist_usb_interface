@@ -4,7 +4,7 @@ import time
 
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Twist
+from control_tower_ros2.msg import WheelCommands
 
 import serial
 
@@ -31,7 +31,7 @@ class TwistToUSB(Node):
         # parameters list: port, baud, input topic, send_rate_hz, timeout_s
         self.declare_parameter("port","/dev/igvc_tx_pico")
         self.declare_parameter("baud", 921600)
-        self.declare_parameter("topic", "/cmd_vel")
+        self.declare_parameter("topic", "/wheel_commands")
         self.declare_parameter("send_rate_hz", 50.0)
         self.declare_parameter("timeout_s", 0.2) ### adjust for hz rate
                 
@@ -44,9 +44,12 @@ class TwistToUSB(Node):
                 
         # member varibles
         self.seq = 0
-        self.last_twist_time = 0.0
-        self.last_linear_x = 0.0
-        self.last_angular_z = 0.0
+        self.last_command_time = 0.0
+        
+        self.last_left_speed = 0.0
+        self.last_right_speed = 0.0
+        self.last_left_steer = 0.0
+        self.last_right_steer = 0.0
         
         # open serial
         self.serial = serial.Serial(
@@ -60,50 +63,68 @@ class TwistToUSB(Node):
         self.get_logger().info(f"Opened Serial {port} @ {baud} baud")
         
         # Creating the input sub of cammnd val
-        self.sub = self.create_subscription(Twist,topic, self.on_twist, 10)
+        self.sub = self.create_subscription(WheelCommands,topic, self.on_wheel_commands, 10)
         period = 1.0 /max(1.0, send_rate_hz)
         self.timer = self.create_timer(period, self.send_packet)
         
-    def on_twist(self, msg: Twist):
-        self.last_linear_x = float(msg.linear.x)
-        self.last_angular_z = float(msg.angular.z)
-        self.last_twist_time = time.monotonic()
+    def on_wheel_commands(self, msg: WheelCommands):
+        #Left/Right speed
+        self.last_left_speed = float(msg.left_speed)
+        self.last_right_speed = float(msg.right_speed)
+        # Left/Right steer
+        self.last_left_steer = float(msg.left_steer)
+        self.last_right_steer = float(msg.right_steer)
+        # timing
+        self.last_command_time = time.monotonic()
         
-    def build_packet(self, linear_x: float, angular_z: float, flags: int = 0):
+    def build_packet(self, left_speed: float,
+                           right_speed: float, 
+                           left_steer: float, 
+                           right_steer: float, 
+                           flags: int = 0):
         # scaling
         # the rounding is required becuase 1.2 * 1000.0 can produce 1199.9998 then int truncates the .XX
-        # leaving a clean i16 value
-        lin_i16 = clamp_i16(int(round(linear_x * 1000.0))) # m/s -> mm/s
-        ang_i16 = clamp_i16(int(round(angular_z * 1000.0))) # rad/s ->  mrad/s
+        
+        left_speed_i16 = clamp_i16(int(round(left_speed * 1000.0)))    # m/s -> mm/s
+        right_speed_i16 = clamp_i16(int(round(right_speed * 1000.0)))  # m/s -> mm/s
+        left_steer_i16 = clamp_i16(int(round(left_steer * 1000.0)))    # rad -> mrad
+        right_steer_i16 = clamp_i16(int(round(right_steer * 1000.0)))  # rad -> mrad
         
         sof = b"\xAA\x55" # Start-of-frame - if you see AA 55 then you know a package is coming
+        
         seq = self.seq & 0xFF # Sequence number - & 0xFF keeps only the lowest 8 bits 0 -255 then wraps around
         flags = flags & 0xFF # this the bit field we can flag, 0 -255
         
         # < is little endian
         # B is unsinged int 8-bit
         # h is signed int 16-bit
-        payload = struct.pack("<BBhh",seq, flags,lin_i16,ang_i16)
+        payload = struct.pack("<BBhhhh",seq, flags, left_speed_i16, right_speed_i16, left_steer_i16, right_steer_i16)
+        # 10 bytes payload
         
         crc = crc8_atm(payload) # checksum if fail discard
         pkg = sof + payload + struct.pack("<B", crc) # completing the full package
+        #13 bytes total package
         return pkg 
     
     def send_packet(self):
         now = time.monotonic()
         
         
-        if(now - self.last_twist_time) > self.timeout_s:
-            linear_x = 0.0
-            angular_z = 0.0
+        if(now - self.last_command_time) > self.timeout_s:
+            left_speed = 0.0
+            right_speed = 0.0
+            left_steer = 0.0
+            right_steer = 0.0
             flags = 0x01 
         
         else:
-            linear_x = self.last_linear_x
-            angular_z = self.last_angular_z
+            left_speed = self.last_left_speed
+            right_speed = self.last_right_speed
+            left_steer = self.last_left_steer
+            right_steer = self.last_right_steer
             flags = 0x00
         
-        pkt = self.build_packet(linear_x,angular_z, flags)
+        pkt = self.build_packet(left_speed, right_speed, left_steer, right_steer, flags)
         
         try:
             self.serial.write(pkt)
@@ -111,9 +132,7 @@ class TwistToUSB(Node):
                 self.get_logger().warn("Serial write timeout", throttle_duration_sec=10.0)
         except Exception as e:
                 self.get_logger().error(f"Serial write error: {e}", throttle_duration_sec=10.0)
-                self.try_reconnect()
-
-        
+                        
         self.seq = (self.seq + 1) & 0xFF
     
     def destroy_node(self):
