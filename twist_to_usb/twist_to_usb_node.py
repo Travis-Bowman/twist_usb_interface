@@ -12,17 +12,16 @@ import serial
 def clamp_i16(x:int):
     return max(-32768, min(32767,x))
 
-def crc8_atm(data: bytes, poly: int = 0x07, init: int = 0x00) -> int:
-    """
-    CRC-8/ATM (poly 0x07), init 0x00, no xorout, no reflection.
-    Good simple CRC for short packets.
-    """
-    crc = init
+def crc8_atm(data: bytes) -> int:
+    """CRC-8/ATM (poly 0x07, init 0x00). Covers bytes 2-19 of the packet (full payload)."""
+    crc = 0
     for b in data:
         crc ^= b
         for _ in range(8):
-            crc = ((crc << 1) ^ poly) & 0xFF if (crc & 0x80) else (crc << 1) & 0xFF
+            crc = ((crc << 1) ^ 0x07) & 0xFF if (crc & 0x80) else (crc << 1) & 0xFF
     return crc
+
+
 
 class TwistToUSB(Node):
     def __init__(self):
