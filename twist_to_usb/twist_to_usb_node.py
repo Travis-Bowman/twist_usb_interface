@@ -44,12 +44,18 @@ class TwistToUSB(Node):
                 
         # member varibles
         self.seq = 0
-        self.last_command_time = 0.0
+        self.lastCommandTime = 0.0
         
-        self.last_left_speed = 0.0
-        self.last_right_speed = 0.0
-        self.last_left_steer = 0.0
-        self.last_right_steer = 0.0
+        # Front motors
+        self.lastFrontLeftSpeed = 0.0
+        self.lastFrontLeftSteer = 0.0
+        self.lastFrontRightSpeed = 0.0
+        self.lastFrontRightSteer = 0.0
+        # Rear motors
+        self.lastRearLeftSpeed = 0.0
+        self.lastRearLeftSteer = 0.0
+        self.lastRearRightSpeed = 0.0
+        self.lastRearRightSteer = 0.0
         
         # open serial
         self.serial = serial.Serial(
@@ -68,63 +74,105 @@ class TwistToUSB(Node):
         self.timer = self.create_timer(period, self.send_packet)
         
     def on_wheel_commands(self, msg: WheelCommands):
-        #Left/Right speed
-        self.last_left_speed = float(msg.left_speed)
-        self.last_right_speed = float(msg.right_speed)
-        # Left/Right steer
-        self.last_left_steer = float(msg.left_steer)
-        self.last_right_steer = float(msg.right_steer)
-        # timing
-        self.last_command_time = time.monotonic()
         
-    def build_packet(self, left_speed: float,
-                           right_speed: float, 
-                           left_steer: float, 
-                           right_steer: float, 
+        # Front motors 
+        self.lastFrontLeftSpeed = float(msg.front_left_speed)
+        self.lastFrontLeftSteer = float(msg.front_left_steer)
+        self.lastFrontRightSpeed = float(msg.front_right_speed)
+        self.lastFrontRightSteer = float(msg.front_right_steer)
+        # Rear motors
+        self.lastRearLeftSpeed = float(msg.rear_left_speed)
+        self.lastRearLeftSteer = float(msg.rear_left_steer)
+        self.lastRearRightSpeed = float(msg.rear_right_speed)
+        self.lastRearRightSteer = float(msg.rear_right_steer)
+        # Timestamp
+        self.lastCommandTime = time.monotonic()
+        
+    def build_packet(self, frontLeftSpeed: float,
+                           frontLeftSteer: float, 
+                           frontRightSpeed: float,
+                           frontRightsteer: float,
+                           rearLeftSpeed: float,
+                           rearLeftSteer: float, 
+                           rearRightSpeed: float,
+                           rearRightsteer: float, 
                            flags: int = 0):
         # scaling
         # the rounding is required becuase 1.2 * 1000.0 can produce 1199.9998 then int truncates the .XX
+        # Front motors
+        frontLeftSpeedI16 = clamp_i16(int(round(frontLeftSpeed * 1000.0)))    # m/s -> mm/s
+        frontLeftSteerI16 = clamp_i16(int(round(frontLeftSteer * 1000.0)))  # m/s -> mm/s
+        frontRightSpeedI16 = clamp_i16(int(round(frontRightSpeed * 1000.0)))    # rad -> mrad
+        frontRightsteerI16 = clamp_i16(int(round(frontRightsteer * 1000.0)))  # rad -> mrad
+        # Rear motors
+        rearLeftSpeedI16 = clamp_i16(int(round(rearLeftSpeed * 1000.0)))    # m/s -> mm/s
+        rearLeftSteerI16 = clamp_i16(int(round(rearLeftSteer * 1000.0)))  # m/s -> mm/s
+        rearRightSpeedI16 = clamp_i16(int(round(rearRightSpeed * 1000.0)))    # rad -> mrad
+        rearRightsteerI16 = clamp_i16(int(round(rearRightsteer * 1000.0)))  # rad -> mrad
         
-        left_speed_i16 = clamp_i16(int(round(left_speed * 1000.0)))    # m/s -> mm/s
-        right_speed_i16 = clamp_i16(int(round(right_speed * 1000.0)))  # m/s -> mm/s
-        left_steer_i16 = clamp_i16(int(round(left_steer * 1000.0)))    # rad -> mrad
-        right_steer_i16 = clamp_i16(int(round(right_steer * 1000.0)))  # rad -> mrad
-        
-        sof = b"\xAA\x55" # Start-of-frame - if you see AA 55 then you know a package is coming
-        
-        seq = self.seq & 0xFF # Sequence number - & 0xFF keeps only the lowest 8 bits 0 -255 then wraps around
-        flags = flags & 0xFF # this the bit field we can flag, 0 -255
+        # Start-of-frame
+        sof = b"\xAA\x55"
+        # Sequence number: 0-255
+        seq = self.seq & 0xFF 
+        flags = flags & 0xFF
         
         # < is little endian
         # B is unsinged int 8-bit
         # h is signed int 16-bit
-        payload = struct.pack("<BBhhhh",seq, flags, left_speed_i16, right_speed_i16, left_steer_i16, right_steer_i16)
-        # 10 bytes payload
-        
-        crc = crc8_atm(payload) # checksum if fail discard
-        pkg = sof + payload + struct.pack("<B", crc) # completing the full package
-        #13 bytes total package
+        payload = struct.pack("<BBhhhhhhhh",seq, flags, frontLeftSpeedI16, 
+                                                        frontLeftSteerI16, 
+                                                        frontRightSpeedI16, 
+                                                        frontRightsteerI16,
+                                                        rearLeftSpeedI16,
+                                                        rearLeftSteerI16,
+                                                        rearRightSpeedI16,
+                                                        rearRightsteerI16)
+        # checksum if fail discard
+        crc = crc8_atm(payload) 
+        # completing the full package
+        pkg = sof + payload + struct.pack("<B", crc) 
+        #18 bytes total package
         return pkg 
     
     def send_packet(self):
         now = time.monotonic()
         
-        
-        if(now - self.last_command_time) > self.timeout_s:
-            left_speed = 0.0
-            right_speed = 0.0
-            left_steer = 0.0
-            right_steer = 0.0
+        if(now - self.lastCommandTime) > self.timeout_s:
+            # Front motors
+            frontLeftSpeed = 0.0
+            frontLeftSteer = 0.0
+            frontRightSpeed = 0.0
+            frontRightsteer = 0.0
+            # Rear motors
+            rearLeftSpeed = 0.0
+            rearLeftSteer = 0.0
+            rearRightSpeed = 0.0
+            rearRightsteer = 0.0
+            # flag
             flags = 0x01 
         
         else:
-            left_speed = self.last_left_speed
-            right_speed = self.last_right_speed
-            left_steer = self.last_left_steer
-            right_steer = self.last_right_steer
+            # Front motors
+            frontLeftSpeed = self.lastFrontLeftSpeed
+            frontLeftSteer = self.lastFrontLeftSteer
+            frontRightSpeed = self.lastFrontRightSpeed
+            frontRightsteer = self.lastFrontRightSteer
+            # Rear motors
+            rearLeftSpeed = self.lastRearLeftSpeed
+            rearLeftSteer = self.lastRearLeftSteer
+            rearRightSpeed = self.lastRearRightSpeed
+            rearRightsteer = self.lastRearRightSteer
             flags = 0x00
         
-        pkt = self.build_packet(left_speed, right_speed, left_steer, right_steer, flags)
+        pkt = self.build_packet(frontLeftSpeed,
+                                frontLeftSteer,
+                                frontRightSpeed,
+                                frontRightsteer,
+                                rearLeftSpeed,
+                                rearLeftSteer,
+                                rearRightSpeed,
+                                rearRightsteer,
+                                flags)
         
         try:
             self.serial.write(pkt)
