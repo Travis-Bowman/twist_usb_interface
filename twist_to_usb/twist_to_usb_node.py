@@ -4,7 +4,7 @@ import time
 
 import rclpy
 from rclpy.node import Node
-from control_tower_ros2.msg import WheelCommands
+from control_tower_ros2.msg import DiffWheelCommands
 
 import serial
 
@@ -46,15 +46,8 @@ class TwistToUSB(Node):
         self.lastCommandTime = 0.0
         
         # Front motors
-        self.lastFrontLeftSpeed = 0.0
-        self.lastFrontLeftSteer = 0.0
-        self.lastFrontRightSpeed = 0.0
-        self.lastFrontRightSteer = 0.0
-        # Rear motors
-        self.lastRearLeftSpeed = 0.0
-        self.lastRearLeftSteer = 0.0
-        self.lastRearRightSpeed = 0.0
-        self.lastRearRightSteer = 0.0
+        self.leftWheelVel = 0.0
+        self.rightWheelVel = 0.0
         
         # open serial
         self.serial = serial.Serial(
@@ -68,46 +61,27 @@ class TwistToUSB(Node):
         self.get_logger().info(f"Opened Serial {port} @ {baud} baud")
         
         # Creating the input sub of cammnd val
-        self.sub = self.create_subscription(WheelCommands,topic, self.on_wheel_commands, 10)
+        self.sub = self.create_subscription(DiffWheelCommands,topic, self.on_wheel_commands, 10)
         period = 1.0 /max(1.0, send_rate_hz)
         self.timer = self.create_timer(period, self.send_packet)
         
-    def on_wheel_commands(self, msg: WheelCommands):
+    def on_wheel_commands(self, msg: DiffWheelCommands):
         
         # Front motors 
-        self.lastFrontLeftSpeed = float(msg.front_left_speed)
-        self.lastFrontLeftSteer = float(msg.front_left_steer)
-        self.lastFrontRightSpeed = float(msg.front_right_speed)
-        self.lastFrontRightSteer = float(msg.front_right_steer)
-        # Rear motors
-        self.lastRearLeftSpeed = float(msg.rear_left_speed)
-        self.lastRearLeftSteer = float(msg.rear_left_steer)
-        self.lastRearRightSpeed = float(msg.rear_right_speed)
-        self.lastRearRightSteer = float(msg.rear_right_steer)
-        # Timestamp
+        self.l_wheel_vel = float(msg.v_left)
+        self.r_wheel_vel = float(msg.v_right)
+
         self.lastCommandTime = time.monotonic()
         
-    def build_packet(self, frontLeftSpeed: float,
-                           frontLeftSteer: float, 
-                           frontRightSpeed: float,
-                           frontRightsteer: float,
-                           rearLeftSpeed: float,
-                           rearLeftSteer: float, 
-                           rearRightSpeed: float,
-                           rearRightsteer: float, 
+    def build_packet(self, leftWheelVel: float,
+                           rightWheelVel: float, 
                            flags: int = 0):
         # scaling
         # the rounding is required becuase 1.2 * 1000.0 can produce 1199.9998 then int truncates the .XX
         # Front motors
-        frontLeftSpeedI16 = clamp_i16(int(round(frontLeftSpeed * 1000.0)))    # m/s -> mm/s
-        frontLeftSteerI16 = clamp_i16(int(round(frontLeftSteer * 1000.0)))  # m/s -> mm/s
-        frontRightSpeedI16 = clamp_i16(int(round(frontRightSpeed * 1000.0)))    # rad -> mrad
-        frontRightsteerI16 = clamp_i16(int(round(frontRightsteer * 1000.0)))  # rad -> mrad
-        # Rear motors
-        rearLeftSpeedI16 = clamp_i16(int(round(rearLeftSpeed * 1000.0)))    # m/s -> mm/s
-        rearLeftSteerI16 = clamp_i16(int(round(rearLeftSteer * 1000.0)))  # m/s -> mm/s
-        rearRightSpeedI16 = clamp_i16(int(round(rearRightSpeed * 1000.0)))    # rad -> mrad
-        rearRightsteerI16 = clamp_i16(int(round(rearRightsteer * 1000.0)))  # rad -> mrad
+        leftWheelVelI16 = clamp_i16(int(round(leftWheelVel * 1000.0)))    # m/s -> mm/s
+        rightWheelVelI16 = clamp_i16(int(round(rightWheelVel * 1000.0)))  # m/s -> mm/s
+
         
         # Start-of-frame
         sof = b"\xAA\x55"
@@ -118,14 +92,9 @@ class TwistToUSB(Node):
         # < is little endian
         # B is unsinged int 8-bit
         # h is signed int 16-bit
-        payload = struct.pack("<BBhhhhhhhh",seq, flags, frontLeftSpeedI16, 
-                                                        frontLeftSteerI16, 
-                                                        frontRightSpeedI16, 
-                                                        frontRightsteerI16,
-                                                        rearLeftSpeedI16,
-                                                        rearLeftSteerI16,
-                                                        rearRightSpeedI16,
-                                                        rearRightsteerI16)
+        payload = struct.pack("<BBhh",seq, flags, leftWheelVelI16, 
+                                                    rightWheelVelI16, 
+)
         # checksum if fail discard
         crc = crc8_atm(payload) 
         # completing the full package
@@ -138,39 +107,20 @@ class TwistToUSB(Node):
         
         if(now - self.lastCommandTime) > self.timeout_s:
             # Front motors
-            frontLeftSpeed = 0.0
-            frontLeftSteer = 0.0
-            frontRightSpeed = 0.0
-            frontRightsteer = 0.0
-            # Rear motors
-            rearLeftSpeed = 0.0
-            rearLeftSteer = 0.0
-            rearRightSpeed = 0.0
-            rearRightsteer = 0.0
+            leftWheelVel = 0.0
+            rightWheelVel = 0.0
             # flag
             flags = 0x01 
         
         else:
             # Front motors
-            frontLeftSpeed = self.lastFrontLeftSpeed
-            frontLeftSteer = self.lastFrontLeftSteer
-            frontRightSpeed = self.lastFrontRightSpeed
-            frontRightsteer = self.lastFrontRightSteer
-            # Rear motors
-            rearLeftSpeed = self.lastRearLeftSpeed
-            rearLeftSteer = self.lastRearLeftSteer
-            rearRightSpeed = self.lastRearRightSpeed
-            rearRightsteer = self.lastRearRightSteer
+            leftWheelVel = self.leftWheelVel
+            rightWheelVel = self.rightWheelVel
+
             flags = 0x00
         
-        pkt = self.build_packet(frontLeftSpeed,
-                                frontLeftSteer,
-                                frontRightSpeed,
-                                frontRightsteer,
-                                rearLeftSpeed,
-                                rearLeftSteer,
-                                rearRightSpeed,
-                                rearRightsteer,
+        pkt = self.build_packet(leftWheelVel,
+                                rightWheelVel,
                                 flags)
         
         try:
