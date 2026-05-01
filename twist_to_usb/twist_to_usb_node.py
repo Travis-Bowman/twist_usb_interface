@@ -21,8 +21,6 @@ def crc8_atm(data: bytes) -> int:
             crc = ((crc << 1) ^ 0x07) & 0xFF if (crc & 0x80) else (crc << 1) & 0xFF
     return crc
 
-
-
 class TwistToUSB(Node):
     def __init__(self):
         super().__init__("twist_to_usb")
@@ -30,7 +28,7 @@ class TwistToUSB(Node):
         # parameters list: port, baud, input topic, send_rate_hz, timeout_s
         self.declare_parameter("port","/dev/igvc_tx_pico")
         self.declare_parameter("baud", 921600)
-        self.declare_parameter("topic", "/wheel_commands")
+        self.declare_parameter("topic", "/control/wheel_commands")
         self.declare_parameter("send_rate_hz", 50.0)
         self.declare_parameter("timeout_s", 0.2) ### adjust for hz rate
                 
@@ -67,10 +65,10 @@ class TwistToUSB(Node):
         
     def on_wheel_commands(self, msg: DiffWheelCommands):
         
-        # Front motors 
-        self.l_wheel_vel = float(msg.v_left)
-        self.r_wheel_vel = float(msg.v_right)
-
+        # Front motors
+        self.leftWheelVel = float(msg.v_left)
+        self.rightWheelVel = float(msg.v_right)
+        
         self.lastCommandTime = time.monotonic()
         
     def build_packet(self, leftWheelVel: float,
@@ -81,7 +79,7 @@ class TwistToUSB(Node):
         # Front motors
         leftWheelVelI16 = clamp_i16(int(round(leftWheelVel * 1000.0)))    # m/s -> mm/s
         rightWheelVelI16 = clamp_i16(int(round(rightWheelVel * 1000.0)))  # m/s -> mm/s
-
+        #self.get_logger().info(f"leftWheelVel {leftWheelVelI16} rightWheelVel {rightWheelVelI16}")
         
         # Start-of-frame
         sof = b"\xAA\x55"
@@ -92,9 +90,7 @@ class TwistToUSB(Node):
         # < is little endian
         # B is unsinged int 8-bit
         # h is signed int 16-bit
-        payload = struct.pack("<BBhh",seq, flags, leftWheelVelI16, 
-                                                    rightWheelVelI16, 
-)
+        payload = struct.pack("<BBhh", seq, flags, leftWheelVelI16, rightWheelVelI16)
         # checksum if fail discard
         crc = crc8_atm(payload) 
         # completing the full package
